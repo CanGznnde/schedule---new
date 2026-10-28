@@ -1,27 +1,20 @@
+import os
 import sys
 import sqlite3
 import datetime
 from pathlib import Path
 
 def get_db_path():
+    """Return the database file: $PLANNER_DB if set, else planner.db next to the app."""
+    override = os.environ.get("PLANNER_DB")
+    if override:
+        return str(Path(override).expanduser().resolve())
+
     if getattr(sys, 'frozen', False):
         base_dir = Path(sys.executable).resolve().parent
     else:
         base_dir = Path(__file__).resolve().parent
-
-    planner_path = base_dir / "planner.db"
-    if planner_path.exists():
-        return str(planner_path)
-
-    db_files = list(base_dir.glob("*.db"))
-    if db_files:
-        return str(db_files[0])
-
-    cwd_db_files = [f for f in Path.cwd().glob("*.db") if f.is_file()]
-    if cwd_db_files:
-        return str(cwd_db_files[0])
-
-    return str(planner_path)
+    return str(base_dir / "planner.db")
 
 DB_NAME = get_db_path()
 
@@ -75,6 +68,10 @@ def init_db():
             c.execute("ALTER TABLE tasks ADD COLUMN end_time TEXT")
         if "work_package" not in task_columns:
             c.execute("ALTER TABLE tasks ADD COLUMN work_package TEXT DEFAULT ''")
+        if "priority" not in task_columns:
+            c.execute("ALTER TABLE tasks ADD COLUMN priority INTEGER DEFAULT 0")
+        if "notes" not in task_columns:
+            c.execute("ALTER TABLE tasks ADD COLUMN notes TEXT DEFAULT ''")
         
         # Insert a default project if empty
         c.execute("SELECT COUNT(*) FROM projects")
@@ -133,22 +130,23 @@ def get_task(task_id):
     with sqlite3.connect(DB_NAME) as conn:
         return conn.execute(
             """
-            SELECT id, project_id, title, start_date, deadline, start_time, end_time, completed, work_package
+            SELECT id, project_id, title, start_date, deadline, start_time, end_time, completed, work_package,
+                   ifnull(priority, 0), ifnull(notes, '')
             FROM tasks
             WHERE id=?
             """,
             (task_id,),
         ).fetchone()
 
-def update_task_details(task_id, title, start_date, deadline, start_time, end_time, work_package):
+def update_task_details(task_id, title, start_date, deadline, start_time, end_time, work_package, priority=0, notes=""):
     with sqlite3.connect(DB_NAME) as conn:
         conn.execute(
             """
             UPDATE tasks
-            SET title=?, start_date=?, deadline=?, start_time=?, end_time=?, work_package=?
+            SET title=?, start_date=?, deadline=?, start_time=?, end_time=?, work_package=?, priority=?, notes=?
             WHERE id=?
             """,
-            (title, start_date, deadline, start_time, end_time, work_package, task_id)
+            (title, start_date, deadline, start_time, end_time, work_package, priority, notes, task_id)
         )
 
 def get_tasks(project_id):
@@ -163,12 +161,21 @@ def get_tasks(project_id):
             (project_id,),
         ).fetchall()
 
-def add_task(project_id, title, start_date, deadline, start_time=None, end_time=None, completed=0, work_package=""):
+def add_task(project_id, title, start_date, deadline, start_time=None, end_time=None, completed=0, work_package="", priority=0, notes=""):
     with sqlite3.connect(DB_NAME) as conn:
         conn.execute(
-            "INSERT INTO tasks (project_id, title, start_date, deadline, start_time, end_time, completed, work_package) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (project_id, title, start_date, deadline, start_time, end_time, completed, work_package),
+            "INSERT INTO tasks (project_id, title, start_date, deadline, start_time, end_time, completed, work_package, priority, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (project_id, title, start_date, deadline, start_time, end_time, completed, work_package, priority, notes),
         )
+
+def get_task_extras(project_id):
+    """Return {task_id: (priority, notes)} for a project's tasks."""
+    with sqlite3.connect(DB_NAME) as conn:
+        rows = conn.execute(
+            "SELECT id, ifnull(priority, 0), ifnull(notes, '') FROM tasks WHERE project_id=?",
+            (project_id,),
+        ).fetchall()
+    return {row[0]: (row[1], row[2]) for row in rows}
 
 def update_task_dates(task_id, start_date, deadline):
     with sqlite3.connect(DB_NAME) as conn:
@@ -302,3 +309,33 @@ def get_dashboard_stats():
         "due_today": due_today,
         "overdue": overdue,
     }
+
+
+def _like(query):
+    escaped = query.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+    return f"%{escaped}%"
+
+def search_tasks(query, limit=100):
+    """Tasks whose title, notes, work package or project name contains the query."""
+    pattern = _like(query)
+    with sqlite3.connect(DB_NAME) as conn:
+        return conn.execute(
+            """
+            SELECT t.id, t.title, t.deadline, t.completed, p.id, p.name
+            FROM tasks t
+            JOIN projects p ON p.id = t.project_id
+            WHERE t.title LIKE ? ESCAPE '!' OR ifnull(t.notes, '') LIKE ? ESCAPE '!'
+               OR ifnull(t.work_package, '') LIKE ? ESCAPE '!' OR p.name LIKE ? ESCAPE '!'
+            ORDER BY t.completed ASC, t.deadline ASC
+            LIMIT ?
+            """,
+            (pattern, pattern, pattern, pattern, limit),
+        ).fetchall()
+
+def search_logs(query, limit=50):
+    """Daily logs containing the query, newest first."""
+    with sqlite3.connect(DB_NAME) as conn:
+        return conn.execute(
+            "SELECT date, content FROM daily_logs WHERE content LIKE ? ESCAPE '!' ORDER BY date DESC LIMIT ?",
+            (_like(query), limit),
+        ).fetchall()

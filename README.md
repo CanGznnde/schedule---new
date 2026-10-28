@@ -10,10 +10,12 @@ Built with Python, PySide6 (Qt) and SQLite.
 
 - **Dashboard** – counts of projects, open, completed, due-today and overdue tasks, a banner for your next meeting, and a list of upcoming deadlines (due-today items in red).
 - **Projects** – create projects with optional start/end dates, rename them, and drag them in the sidebar to reorder.
-- **Tasks** – each task has a title, start date, deadline, optional start/end time and an optional *work package* used for grouping. Tasks can be checked off and can have subtasks.
-- **Gantt chart** – per-project timeline with tasks grouped by work package. Tasks with the work package `Meeting` are treated as meetings and surfaced on the dashboard.
+- **Tasks** – each task has a title, start date, deadline, optional start/end time, an optional *work package* used for grouping, a **priority** (None/Low/Medium/High) and free-text **notes**. Tasks can be checked off and can have a checklist. Press Enter in the title box to add a task, and use the *High Priority* filter to focus.
+- **Gantt chart** – per-project timeline with tasks grouped by work package, a dashed **Today** line, and labels that move beside a bar when it is too small to hold them. Drag a bar to reschedule it. Tasks with the work package `Meeting` are treated as meetings and surfaced on the dashboard.
 - **Calendar** – month view with markers on days that have tasks, plus the tasks for the selected day.
 - **Daily log** – free-text notes saved per day.
+- **Global search** (`Ctrl+F`) – finds tasks (title, notes, work package, project) and daily logs, and jumps straight to the result.
+- **Dark mode** – toggle in the sidebar; your choice and window size are remembered.
 - **Reminders** – a popup on launch lists tasks due today.
 
 ## Screenshots
@@ -28,6 +30,10 @@ Built with Python, PySide6 (Qt) and SQLite.
 
 ![Projects overview](docs/screenshots/projects.png)
 
+| Search | Dark mode |
+|---|---|
+| ![Search](docs/screenshots/search.png) | ![Dark mode](docs/screenshots/dark-mode.png) |
+
 The screenshots use made-up sample data.
 
 ## Getting started
@@ -39,13 +45,25 @@ pip install -r requirements.txt
 python main.py
 ```
 
+### Keyboard shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl+N` | Jump to a project and focus the new-task box |
+| `Ctrl+F` | Search tasks, notes and daily logs |
+| `Enter` (in the task box) | Add the task |
+
 ### Where is my data?
 
 Your data lives in `planner.db`, in the same folder as `main.py` (or next to the `.exe` when running the packaged build). It is created automatically on first launch, and older databases are migrated in place when new columns are added.
 
 To back up or move your schedule, copy that one file. It is excluded from git so personal data is never committed.
 
-> **Note:** if `planner.db` is missing, the app falls back to the first `*.db` file it finds in its folder, then in the current working directory. Avoid keeping unrelated `.db` files next to it.
+To use a different file (for example for testing, or a database on a synced drive), set the `PLANNER_DB` environment variable to its path before launching:
+
+```bash
+PLANNER_DB=/path/to/other.db python main.py
+```
 
 ## Build a standalone executable (Windows)
 

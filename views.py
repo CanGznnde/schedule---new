@@ -1,5 +1,6 @@
 from PySide6.QtCore import QDate, Qt, QTime, QEvent, QRect, QSize
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QFrame,
     QGridLayout,
@@ -39,6 +40,22 @@ import database as db
 
 CALENDAR_PALETTE = ["#3498db", "#9b59b6", "#1abc9c", "#e67e22", "#34495e", "#2ecc71", "#f1c40f", "#8e44ad", "#d35400", "#c0392b"]
 MEETING_COLOR = "#e74c3c"
+
+PRIORITY_LABELS = ["None", "Low", "Medium", "High"]
+PRIORITY_COLORS = {2: "#e08a1e", 3: "#d64545"}
+
+
+def is_dark():
+    app = QApplication.instance()
+    return bool(app) and app.palette().window().color().lightness() < 128
+
+
+def gantt_colors():
+    if is_dark():
+        return {"header": "#2b3138", "grid": "#3a424b", "weekend": "#262b31", "text": "#c5ccd3",
+                "title": "#e6eaee", "today": "#ff6b6b", "outside": "#dfe5ea"}
+    return {"header": "#f8f9fa", "grid": "#e0e0e0", "weekend": "#f4f6f8", "text": "#666666",
+            "title": "#333333", "today": "#e74c3c", "outside": "#333333"}
 
 class TaskCalendarWidget(QCalendarWidget):
     def __init__(self, parent=None):
@@ -129,7 +146,7 @@ class ClickableTextItem(QGraphicsTextItem):
             QTimer.singleShot(0, lambda: self.callback(self.data))
 
 class GanttTaskItem(QGraphicsRectItem):
-    def __init__(self, task_id, title, start_date, deadline, date_to_x, x_to_date, cb_update, y_pos, color="#1f6f8b"):
+    def __init__(self, task_id, title, start_date, deadline, date_to_x, x_to_date, cb_update, y_pos, color="#1f6f8b", outside_color="#333333"):
         super().__init__()
         self.task_id = task_id
         self.title = title
@@ -155,6 +172,10 @@ class GanttTaskItem(QGraphicsRectItem):
         self.text_item = QGraphicsTextItem(title, self)
         self.text_item.setDefaultTextColor(QColor("white"))
         self.text_item.setPos(5, 5)
+        if self.text_item.boundingRect().width() + 10 > self.rect().width():
+            self.text_item.setDefaultTextColor(QColor(outside_color))
+            self.text_item.setPos(self.rect().width() + 4, 5)
+        self.setToolTip(f"{title}\n{start_date} to {deadline}")
 
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
@@ -248,12 +269,13 @@ class GanttTimelineView(QGraphicsView):
             max_d = max(dates).addMonths(2)
             num_cols = (max_d.year() - self.min_date.year()) * 12 + max_d.month() - self.min_date.month()
 
+        colors = gantt_colors()
         header_h = 60
         h_height = len(visible_items) * self.row_height + header_h
 
         header_bg = self.scene.addRect(0, 0, (num_cols + 1) * self.col_width, header_h)
-        header_bg.setBrush(QBrush(QColor("#f8f9fa")))
-        header_bg.setPen(QPen(QColor("#e0e0e0")))
+        header_bg.setBrush(QBrush(QColor(colors["header"])))
+        header_bg.setPen(QPen(QColor(colors["grid"])))
         header_bg.setZValue(1)
 
         for i in range(num_cols + 1):
@@ -263,15 +285,15 @@ class GanttTimelineView(QGraphicsView):
                 d = self.min_date.addDays(i)
                 if d.dayOfWeek() in (6, 7):
                     rect = self.scene.addRect(x, header_h, self.col_width, max(0, h_height - header_h))
-                    rect.setBrush(QBrush(QColor("#f4f6f8")))
+                    rect.setBrush(QBrush(QColor(colors["weekend"])))
                     rect.setPen(Qt.PenStyle.NoPen)
                 else:
                     line = self.scene.addLine(x, 0, x, h_height)
-                    line.setPen(QPen(QColor("#e0e0e0")))
+                    line.setPen(QPen(QColor(colors["grid"])))
                 
                 txt = self.scene.addText(d.toString("dd"))
                 txt.setPos(x + 2, header_h - 25)
-                txt.setDefaultTextColor(QColor("#666666"))
+                txt.setDefaultTextColor(QColor(colors["text"]))
                 txt.setZValue(2)
 
                 if d.day() == 1 or i == 0:
@@ -287,13 +309,13 @@ class GanttTimelineView(QGraphicsView):
                     font.setBold(True)
                     month_txt.setFont(font)
                     month_txt.setPos(x + 2, header_h - 45)
-                    month_txt.setDefaultTextColor(QColor("#333333"))
+                    month_txt.setDefaultTextColor(QColor(colors["title"]))
                     month_txt.setZValue(2)
                     self.scene.addItem(month_txt)
             else:
                 d = self.min_date.addMonths(i)
                 line = self.scene.addLine(x, 0, x, h_height)
-                line.setPen(QPen(QColor("#e0e0e0")))
+                line.setPen(QPen(QColor(colors["grid"])))
                 
                 month_name = d.toString("MMM yyyy")
                 m_indicator = ""
@@ -309,7 +331,7 @@ class GanttTimelineView(QGraphicsView):
                 
                 txt_width = month_txt.boundingRect().width()
                 month_txt.setPos(x + (self.col_width - txt_width) / 2, (header_h - month_txt.boundingRect().height()) / 2)
-                month_txt.setDefaultTextColor(QColor("#333333"))
+                month_txt.setDefaultTextColor(QColor(colors["title"]))
                 month_txt.setZValue(2)
                 self.scene.addItem(month_txt)
 
@@ -326,21 +348,39 @@ class GanttTimelineView(QGraphicsView):
                     rect.setPen(Qt.PenStyle.NoPen)
                     
                     lbl = self.scene.addText(t['title'])
-                    lbl.setDefaultTextColor(QColor("white"))
-                    lbl.setPos(x1 + 5, y + 5)
                     lbl.setZValue(10)
+                    if lbl.boundingRect().width() + 10 > x2 - x1:
+                        lbl.setDefaultTextColor(QColor(colors["outside"]))
+                        lbl.setPos(x2 + 4, y + 5)
+                    else:
+                        lbl.setDefaultTextColor(QColor("white"))
+                        lbl.setPos(x1 + 5, y + 5)
             else:
                 base_color = QColor(t.get("color", "#1f6f8b"))
                 if t.get("has_subtasks", False):
                     base_color = base_color.lighter(140)
                     
-                item = GanttTaskItem(t['id'], t['title'], t['start_date'], t['deadline'], self.date_to_x, self.x_to_date, update_callback, y, base_color.name())
+                item = GanttTaskItem(t['id'], t['title'], t['start_date'], t['deadline'], self.date_to_x, self.x_to_date, update_callback, y, base_color.name(), colors["outside"])
                 item.setRect(0, 4, item.rect().width(), self.row_height - 8)
                 item.setZValue(10)
                 self.scene.addItem(item)
             y += self.row_height
             
-        self.setSceneRect(0, 0, num_cols * self.col_width, y + 20)
+        today = QDate.currentDate()
+        today_x = self.date_to_x(today)
+        if 0 <= today_x <= (num_cols + 1) * self.col_width:
+            if self.view_mode == "days":
+                today_x += self.col_width / 2
+            today_line = self.scene.addLine(today_x, 0, today_x, y)
+            today_line.setPen(QPen(QColor(colors["today"]), 2, Qt.PenStyle.DashLine))
+            today_line.setZValue(5)
+            today_line.setToolTip("Today")
+            today_lbl = self.scene.addText("Today")
+            today_lbl.setDefaultTextColor(QColor(colors["today"]))
+            today_lbl.setPos(today_x + 2, header_h - 22)
+            today_lbl.setZValue(6)
+
+        self.setSceneRect(0, 0, (num_cols + 1) * self.col_width, y + 20)
 
 
 class GanttTab(QWidget):
@@ -352,19 +392,19 @@ class GanttTab(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Work Package / Task", "Duration", "Start", "Deadline"])
+        self.tree.setHeaderLabels(["Work Package / Task", "Days", "Start", "Deadline"])
         self.tree.setIndentation(0)
-        self.tree.setColumnWidth(0, 160)
-        self.tree.setColumnWidth(1, 60)
-        self.tree.setColumnWidth(2, 70)
-        self.tree.setColumnWidth(3, 70)
+        self.tree.setColumnWidth(0, 170)
+        self.tree.setColumnWidth(1, 55)
+        self.tree.setColumnWidth(2, 90)
+        self.tree.setColumnWidth(3, 90)
         
         self.timeline = GanttTimelineView()
         
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self.tree)
         splitter.addWidget(self.timeline)
-        splitter.setSizes([360, 640])
+        splitter.setSizes([430, 600])
         root.addWidget(splitter)
         
         self.tree.verticalScrollBar().valueChanged.connect(self.timeline.verticalScrollBar().setValue)
@@ -423,7 +463,7 @@ class GanttTab(QWidget):
             p_start = min(d_starts).toString(Qt.DateFormat.ISODate) if d_starts else ""
             p_end = max(d_ends).toString(Qt.DateFormat.ISODate) if d_ends else ""
             
-            p_duration = f"{min(d_starts).daysTo(max(d_ends)) + 1} days" if d_starts and d_ends else ""
+            p_duration = f"{min(d_starts).daysTo(max(d_ends)) + 1}d" if d_starts and d_ends else ""
             
             pkg_item = QTreeWidgetItem([wp, p_duration, p_start, p_end])
             font = pkg_item.font(0)
@@ -437,7 +477,7 @@ class GanttTab(QWidget):
             for t in group_tasks:
                 sd = QDate.fromString(t['start_date'], Qt.DateFormat.ISODate)
                 ed = QDate.fromString(t['deadline'], Qt.DateFormat.ISODate)
-                duration = f"{sd.daysTo(ed) + 1} days" if sd.isValid() and ed.isValid() else ""
+                duration = f"{sd.daysTo(ed) + 1}d" if sd.isValid() and ed.isValid() else ""
                 
                 display_title = t['title'] + (" (☑)" if t.get("has_subtasks") else "")
                 t_item = QTreeWidgetItem([display_title, duration, t['start_date'], t['deadline']])
@@ -746,7 +786,7 @@ class TaskEditDialog(QDialog):
         super().__init__(parent)
         self.task_id = task_id
         self.setWindowTitle("Edit Task")
-        self.resize(350, 250)
+        self.resize(420, 400)
         
         import database as db
         task = db.get_task(task_id)
@@ -788,6 +828,17 @@ class TaskEditDialog(QDialog):
         self.end_time.setDisplayFormat("HH:mm")
         if task[6]: self.end_time.setTime(QTime.fromString(task[6], "HH:mm"))
         layout.addRow("End Time:", self.end_time)
+
+        self.priority_input = QComboBox()
+        self.priority_input.addItems(PRIORITY_LABELS)
+        self.priority_input.setCurrentIndex(max(0, min(task[9], len(PRIORITY_LABELS) - 1)))
+        layout.addRow("Priority:", self.priority_input)
+
+        self.notes_input = QTextEdit()
+        self.notes_input.setAcceptRichText(False)
+        self.notes_input.setPlaceholderText("Notes, links, details...")
+        self.notes_input.setPlainText(task[10])
+        layout.addRow("Notes:", self.notes_input)
         
         from PySide6.QtWidgets import QDialogButtonBox
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
@@ -804,7 +855,9 @@ class TaskEditDialog(QDialog):
             self.end_date.date().toString(Qt.DateFormat.ISODate),
             self.start_time.time().toString("HH:mm"),
             self.end_time.time().toString("HH:mm"),
-            self.wp_input.text().strip()
+            self.wp_input.text().strip(),
+            self.priority_input.currentIndex(),
+            self.notes_input.toPlainText().strip(),
         )
         self.accept()
 
@@ -826,14 +879,19 @@ class TaskView(QWidget):
 
         tab1 = QWidget()
         tab1_layout = QVBoxLayout(tab1)
-        self.tabs.addTab(tab1, "List & Calendar")
+        self.tabs.addTab(tab1, "List && Calendar")
 
         self.gantt = GanttTab(self.update_from_gantt)
         self.tabs.addTab(self.gantt, "Gantt Chart")
 
         input_layout = QHBoxLayout()
         self.task_input = QLineEdit()
-        self.task_input.setPlaceholderText("Add a new task...")
+        self.task_input.setPlaceholderText("Add a new task...  (Ctrl+N)")
+        self.task_input.returnPressed.connect(self.add_task)
+
+        self.priority_input = QComboBox()
+        self.priority_input.addItems(PRIORITY_LABELS)
+        self.priority_input.setToolTip("Priority")
 
         self.work_package_input = QComboBox()
         self.work_package_input.setEditable(True)
@@ -864,25 +922,29 @@ class TaskView(QWidget):
         add_btn = QPushButton("Add Task")
         add_btn.clicked.connect(self.add_task)
 
-        input_layout.addWidget(self.task_input)
-        input_layout.addWidget(self.work_package_input)
-        input_layout.addWidget(self.start_date_picker)
-        label = QLabel("-")
-        input_layout.addWidget(label)
-        input_layout.addWidget(self.date_picker)
-        input_layout.addWidget(self.with_time_checkbox)
-        input_layout.addWidget(self.start_time_edit)
-        input_layout.addWidget(self.end_time_edit)
+        input_layout.addWidget(self.task_input, 1)
+        input_layout.addWidget(self.priority_input)
         input_layout.addWidget(add_btn)
         tab1_layout.addLayout(input_layout)
 
+        options_layout = QHBoxLayout()
+        options_layout.addWidget(self.work_package_input, 1)
+        options_layout.addWidget(self.start_date_picker)
+        label = QLabel("-")
+        options_layout.addWidget(label)
+        options_layout.addWidget(self.date_picker)
+        options_layout.addWidget(self.with_time_checkbox)
+        options_layout.addWidget(self.start_time_edit)
+        options_layout.addWidget(self.end_time_edit)
+        tab1_layout.addLayout(options_layout)
+
         controls = QHBoxLayout()
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Search tasks...")
+        self.search.setPlaceholderText("Filter tasks in this project...")
         self.search.textChanged.connect(self.apply_filters)
 
         self.filter_box = QComboBox()
-        self.filter_box.addItems(["All", "Open", "Completed", "Due Today", "Overdue"])
+        self.filter_box.addItems(["All", "Open", "Completed", "Due Today", "Overdue", "High Priority"])
         self.filter_box.currentIndexChanged.connect(self.apply_filters)
 
         controls.addWidget(self.search)
@@ -929,8 +991,12 @@ class TaskView(QWidget):
 
     def open_task_details(self, item):
         task_id = item.data(Qt.ItemDataRole.UserRole)
+        if task_id is None:
+            return
         title = item.text().split(" (Date:")[0]
         title = title.replace(" (☑)", "") # Strip icon securely
+        for label in PRIORITY_LABELS[1:]:
+            title = title.removeprefix(f"[{label}] ")
         dlg = TaskDetailsDialog(task_id, title, self)
         dlg.exec()
         self.load_tasks()
@@ -953,8 +1019,13 @@ class TaskView(QWidget):
             self.load_tasks()
             self.refresh_all_callback()
 
+    def focus_new_task(self):
+        self.tabs.setCurrentIndex(0)
+        self.task_input.setFocus()
+
     def load_tasks(self):
         self.rows = db.get_tasks(self.project_id)
+        self.extras = db.get_task_extras(self.project_id)
         self.subtask_counts = db.get_subtask_counts(self.project_id)
         
         wps = set(r[7] for r in self.rows if r[7])
@@ -1031,6 +1102,9 @@ class TaskView(QWidget):
                 continue
             if mode == "Overdue" and (completed or deadline >= today):
                 continue
+            priority, notes = self.extras.get(task_id, (0, ""))
+            if mode == "High Priority" and priority != 3:
+                continue
 
             time_text = ""
             if start_time and end_time:
@@ -1040,7 +1114,12 @@ class TaskView(QWidget):
 
             checklist_indicator = " (☑)" if self.subtask_counts.get(task_id, 0) > 0 else ""
             date_str = f"{start_date} to {deadline}" if start_date and start_date != deadline else deadline
-            item = QListWidgetItem(f"{title}{checklist_indicator} (Date: {date_str}{time_text})")
+            priority_text = f"[{PRIORITY_LABELS[priority]}] " if priority else ""
+            item = QListWidgetItem(f"{priority_text}{title}{checklist_indicator} (Date: {date_str}{time_text})")
+            if priority in PRIORITY_COLORS and not completed:
+                item.setForeground(QColor(PRIORITY_COLORS[priority]))
+            if notes:
+                item.setToolTip(notes)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable)
             item.setCheckState(Qt.CheckState.Checked if completed else Qt.CheckState.Unchecked)
             item.setData(Qt.ItemDataRole.UserRole, task_id)
@@ -1048,6 +1127,12 @@ class TaskView(QWidget):
             font.setStrikeOut(bool(completed))
             item.setFont(font)
             self.task_list.addItem(item)
+
+        if self.task_list.count() == 0:
+            hint = "No tasks yet. Type a title above and press Enter." if not self.rows else "No tasks match the current filter."
+            placeholder = QListWidgetItem(hint)
+            placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.task_list.addItem(placeholder)
 
         self.task_list.blockSignals(False)
 
@@ -1074,7 +1159,9 @@ class TaskView(QWidget):
 
         wp = self.work_package_input.currentText().strip()
 
-        db.add_task(self.project_id, title, start_date, deadline, start_time, end_time, completed=0, work_package=wp)
+        db.add_task(self.project_id, title, start_date, deadline, start_time, end_time, completed=0, work_package=wp,
+                    priority=self.priority_input.currentIndex())
+        self.priority_input.setCurrentIndex(0)
         self.task_input.clear()
         self.load_tasks()
         self.refresh_all_callback()
@@ -1110,6 +1197,17 @@ class TaskView(QWidget):
 
         if not ids_to_delete:
             QMessageBox.information(self, "Delete Task", "Select or check at least one task to delete.")
+            return
+
+        noun = "task" if len(ids_to_delete) == 1 else "tasks"
+        answer = QMessageBox.question(
+            self,
+            "Delete Task",
+            f"Delete {len(ids_to_delete)} {noun}? This cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
             return
 
         for task_id in ids_to_delete:
@@ -1161,17 +1259,8 @@ class DailyLogView(QWidget):
         self.date_picker = QDateEdit()
         self.date_picker.setCalendarPopup(True)
         self.date_picker.setDate(QDate.currentDate())
-        self.date_picker.setStyleSheet("""
-            QDateEdit {
-                font-size: 20px;
-                font-weight: 700;
-                color: #0f2836;
-                background: #eef3f6;
-                border: 1px solid #d9e1e8;
-                border-radius: 8px;
-                padding: 4px;
-            }
-        """)
+        self.date_picker.setObjectName("dailyDate")
+
         self.date_picker.dateChanged.connect(self.load_log)
         header.addWidget(self.date_picker)
         

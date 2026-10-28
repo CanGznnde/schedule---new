@@ -1,9 +1,13 @@
 import datetime
 import sys
 
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QDate, QSettings, Qt
+from PySide6.QtGui import QColor, QKeySequence, QPalette, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
     QCheckBox,
     QDateEdit,
     QDialog,
@@ -26,19 +30,34 @@ import database as db
 from views import CalendarView, DailyLogView, DashboardView, ProjectsOverviewView, TaskView
 
 
-APP_STYLE = """
+THEMES = {
+    "light": {
+        "win_a": "#f6f7f4", "win_b": "#eef3f6", "text": "#1f2933", "panel": "#ffffff",
+        "border": "#d6dde6", "sel": "#d3e8f0", "sel_text": "#13222e", "button": "#1f6f8b",
+        "button_hover": "#1b617a", "input_border": "#ccd5df", "title": "#0f2836",
+        "subtitle": "#5b6b79", "card_border": "#d9e1e8", "daily_bg": "#eef3f6",
+    },
+    "dark": {
+        "win_a": "#1b1f24", "win_b": "#20262c", "text": "#dde3e8", "panel": "#262c33",
+        "border": "#38414a", "sel": "#2f4a5a", "sel_text": "#f0f4f7", "button": "#2a8aad",
+        "button_hover": "#3299bf", "input_border": "#424c56", "title": "#f0f4f7",
+        "subtitle": "#9aa7b3", "card_border": "#38414a", "daily_bg": "#262c33",
+    },
+}
+
+STYLE_TEMPLATE = """
 QMainWindow {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 #f6f7f4, stop:1 #eef3f6);
+        stop:0 @win_a@, stop:1 @win_b@);
 }
 QWidget {
-    color: #1f2933;
+    color: @text@;
     font-family: "Segoe UI";
     font-size: 13px;
 }
 QTreeWidget {
-    background: #ffffff;
-    border: 1px solid #d6dde6;
+    background: @panel@;
+    border: 1px solid @border@;
     border-radius: 10px;
     padding: 6px;
 }
@@ -48,11 +67,11 @@ QTreeWidget::item {
     margin: 2px 0;
 }
 QTreeWidget::item:selected {
-    background: #d3e8f0;
-    color: #13222e;
+    background: @sel@;
+    color: @sel_text@;
 }
 QPushButton {
-    background: #1f6f8b;
+    background: @button@;
     color: #ffffff;
     border: none;
     border-radius: 8px;
@@ -60,38 +79,149 @@ QPushButton {
     font-weight: 600;
 }
 QPushButton:hover {
-    background: #1b617a;
+    background: @button_hover@;
 }
 QLineEdit, QTextEdit, QDateEdit, QComboBox {
-    background: #ffffff;
-    border: 1px solid #ccd5df;
+    background: @panel@;
+    border: 1px solid @input_border@;
     border-radius: 8px;
     padding: 7px;
+}
+QDateEdit#dailyDate {
+    font-size: 20px;
+    font-weight: 700;
+    color: @title@;
+    background: @daily_bg@;
+    border: 1px solid @card_border@;
+    border-radius: 8px;
+    padding: 4px;
 }
 QLabel#pageTitle {
     font-size: 20px;
     font-weight: 700;
-    color: #0f2836;
+    color: @title@;
 }
 QLabel#pageSubtitle {
-    color: #5b6b79;
+    color: @subtitle@;
 }
 QFrame#statCard {
-    background: #ffffff;
-    border: 1px solid #d9e1e8;
+    background: @panel@;
+    border: 1px solid @card_border@;
     border-radius: 12px;
 }
 QLabel#statValue {
     font-size: 24px;
     font-weight: 700;
-    color: #0f2836;
+    color: @title@;
 }
 QLabel#statTitle {
-    color: #5b6b79;
+    color: @subtitle@;
     font-size: 12px;
     font-weight: 600;
 }
+QLabel#emptyHint {
+    color: @subtitle@;
+}
 """
+
+
+def build_style(theme="light"):
+    style = STYLE_TEMPLATE
+    for key, value in THEMES[theme].items():
+        style = style.replace(f"@{key}@", value)
+    return style
+
+
+APP_STYLE = build_style("light")
+
+
+def apply_theme(app, dark):
+    app.setStyle("Fusion")
+    if dark:
+        palette = QPalette()
+        roles = {
+            QPalette.ColorRole.Window: "#1b1f24", QPalette.ColorRole.WindowText: "#dde3e8",
+            QPalette.ColorRole.Base: "#262c33", QPalette.ColorRole.AlternateBase: "#2b323a",
+            QPalette.ColorRole.Text: "#dde3e8", QPalette.ColorRole.Button: "#2b323a",
+            QPalette.ColorRole.ButtonText: "#dde3e8", QPalette.ColorRole.Highlight: "#2a8aad",
+            QPalette.ColorRole.HighlightedText: "#ffffff", QPalette.ColorRole.ToolTipBase: "#2b323a",
+            QPalette.ColorRole.ToolTipText: "#dde3e8", QPalette.ColorRole.PlaceholderText: "#7d8994",
+            QPalette.ColorRole.Link: "#5cb8e0",
+        }
+        for role, color in roles.items():
+            palette.setColor(role, QColor(color))
+        app.setPalette(palette)
+    else:
+        app.setPalette(app.style().standardPalette())
+    app.setStyleSheet(build_style("dark" if dark else "light"))
+
+
+class SearchDialog(QDialog):
+    """Global search over tasks (title, notes, work package, project) and daily logs."""
+
+    def __init__(self, navigate_callback, parent=None):
+        super().__init__(parent)
+        self.navigate_callback = navigate_callback
+        self.setWindowTitle("Search")
+        self.resize(560, 420)
+
+        layout = QVBoxLayout(self)
+        self.query_input = QLineEdit()
+        self.query_input.setPlaceholderText("Search tasks, notes, projects and daily logs...")
+        self.query_input.textChanged.connect(self.run_search)
+        layout.addWidget(self.query_input)
+
+        self.results = QListWidget()
+        self.results.itemActivated.connect(self.open_result)
+        self.results.itemDoubleClicked.connect(self.open_result)
+        layout.addWidget(self.results, 1)
+
+        self.hint = QLabel("Type to search. Press Enter or double-click a result to open it.")
+        self.hint.setObjectName("emptyHint")
+        layout.addWidget(self.hint)
+
+        self.query_input.returnPressed.connect(self.open_first_or_current)
+
+    def run_search(self, text):
+        self.results.clear()
+        query = text.strip()
+        if not query:
+            self.hint.setText("Type to search. Press Enter or double-click a result to open it.")
+            return
+
+        for task_id, title, deadline, completed, project_id, project_name in db.search_tasks(query):
+            status = "done" if completed else f"due {deadline}"
+            item = QListWidgetItem(f"{title}  -  {project_name}  ({status})")
+            item.setData(Qt.ItemDataRole.UserRole, ("task", project_id, task_id))
+            if completed:
+                font = item.font()
+                font.setStrikeOut(True)
+                item.setFont(font)
+            self.results.addItem(item)
+
+        for date_str, content in db.search_logs(query):
+            lowered = content.lower()
+            pos = max(0, lowered.find(query.lower()) - 20)
+            snippet = content[pos:pos + 70].replace("\n", " ")
+            item = QListWidgetItem(f"Log {date_str}:  ...{snippet}...")
+            item.setData(Qt.ItemDataRole.UserRole, ("log", date_str))
+            self.results.addItem(item)
+
+        count = self.results.count()
+        self.hint.setText(f"{count} result{'s' if count != 1 else ''}" if count else "No matches.")
+        if count:
+            self.results.setCurrentRow(0)
+
+    def open_first_or_current(self):
+        if self.results.currentItem():
+            self.open_result(self.results.currentItem())
+
+    def open_result(self, item):
+        target = item.data(Qt.ItemDataRole.UserRole)
+        if not target:
+            return
+        self.accept()
+        self.navigate_callback(target)
 
 
 class ProjectDateDialog(QDialog):
@@ -158,6 +288,11 @@ class PlannerApp(QMainWindow):
         self.resize(1080, 700)
         db.init_db()
 
+        self.settings = QSettings("PersonalWorkSchedule", "Planner")
+        geometry = self.settings.value("geometry")
+        if geometry:
+            self.restoreGeometry(geometry)
+
         self.project_page_map = {}
         self.project_top_items = []
         self.projects_group_item = None
@@ -177,11 +312,15 @@ class PlannerApp(QMainWindow):
         self.add_project_btn.clicked.connect(self.add_project)
         left_layout.addWidget(self.add_project_btn)
 
+        self.search_btn = QPushButton("Search...  (Ctrl+F)")
+        self.search_btn.clicked.connect(self.open_search)
+        left_layout.addWidget(self.search_btn)
+
         self.sidebar = ProjectTreeWidget(self.handle_project_reordered)
         self.sidebar.setHeaderHidden(True)
         self.sidebar.setRootIsDecorated(True)
         self.sidebar.setIndentation(16)
-        self.sidebar.setFixedWidth(290)
+        self.sidebar.setFixedWidth(300)
         self.sidebar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.sidebar.setDragEnabled(True)
         self.sidebar.setAcceptDrops(True)
@@ -189,6 +328,11 @@ class PlannerApp(QMainWindow):
         self.sidebar.setDragDropMode(QTreeWidget.DragDropMode.InternalMove)
         self.sidebar.customContextMenuRequested.connect(self.show_sidebar_context_menu)
         left_layout.addWidget(self.sidebar)
+
+        self.dark_checkbox = QCheckBox("Dark mode")
+        self.dark_checkbox.setChecked(self.settings.value("dark", False, type=bool))
+        self.dark_checkbox.toggled.connect(self.set_dark_mode)
+        left_layout.addWidget(self.dark_checkbox)
 
         layout.addWidget(left_panel)
 
@@ -198,6 +342,9 @@ class PlannerApp(QMainWindow):
         self.setup_ui()
         self.sidebar.itemClicked.connect(self.navigate)
         self._select_home_item()
+
+        QShortcut(QKeySequence("Ctrl+F"), self, activated=self.open_search)
+        QShortcut(QKeySequence("Ctrl+N"), self, activated=self.new_task_shortcut)
         self.check_reminders()
 
     def setup_ui(self):
@@ -232,9 +379,10 @@ class PlannerApp(QMainWindow):
             open_count = len([row for row in task_rows if not row[6]])
             today = datetime.date.today().isoformat()
             due_today = len([row for row in task_rows if row[3] == today and not row[6]])
-            info_suffix = f"  [{open_count}/{total_count} open, due today: {due_today}]"
+            info_suffix = f"  ({open_count}" + (f", {due_today} due" if due_today else "") + ")"
 
             tree_item = self._new_item(f"{project_name}{info_suffix}", "project", project_id)
+            tree_item.setToolTip(0, f"{project_name}\n{open_count}/{total_count} open, {due_today} due today")
             font = tree_item.font(0)
             font.setBold(True)
             tree_item.setFont(0, font)
@@ -545,8 +693,11 @@ class PlannerApp(QMainWindow):
             if target_project_id is None:
                 raise ValueError("New branch project was not created.")
 
-            for _, title, start_date, deadline, start_time, end_time, completed, _ in db.get_tasks(source_project_id):
-                db.add_task(target_project_id, title, start_date, deadline, start_time, end_time, completed)
+            extras = db.get_task_extras(source_project_id)
+            for task_id, title, start_date, deadline, start_time, end_time, completed, work_package in db.get_tasks(source_project_id):
+                priority, notes = extras.get(task_id, (0, ""))
+                db.add_task(target_project_id, title, start_date, deadline, start_time, end_time, completed,
+                            work_package or "", priority, notes)
         except Exception as exc:
             QMessageBox.warning(self, "Branch Project", f"Could not branch project: {exc}")
             return
@@ -580,6 +731,62 @@ class PlannerApp(QMainWindow):
         self.setup_ui()
         self._select_home_item()
 
+    def set_dark_mode(self, dark):
+        self.settings.setValue("dark", dark)
+        apply_theme(QApplication.instance(), dark)
+        self.refresh_all_views()
+
+    def open_search(self):
+        dlg = SearchDialog(self.open_search_result, self)
+        dlg.exec()
+
+    def select_static_item(self, stack_index):
+        for index in range(self.sidebar.topLevelItemCount()):
+            top = self.sidebar.topLevelItem(index)
+            meta = top.data(0, Qt.ItemDataRole.UserRole) or {}
+            if meta.get("type") == "static" and meta.get("payload") == stack_index:
+                self.sidebar.setCurrentItem(top)
+                self.navigate(top, 0)
+                return
+
+    def open_search_result(self, target):
+        if target[0] == "log":
+            self.select_static_item(2)
+            date = QDate.fromString(target[1], Qt.DateFormat.ISODate)
+            if date.isValid():
+                self.daily_view.date_picker.setDate(date)
+            return
+
+        _, project_id, task_id = target
+        self.select_project_item(project_id)
+        page = self.project_page_map.get(project_id)
+        if page is None:
+            return
+        page.tabs.setCurrentIndex(0)
+        page.search.clear()
+        page.filter_box.setCurrentIndex(0)
+        for row in range(page.task_list.count()):
+            item = page.task_list.item(row)
+            if item.data(Qt.ItemDataRole.UserRole) == task_id:
+                page.task_list.setCurrentItem(item)
+                page.task_list.scrollToItem(item)
+                break
+
+    def new_task_shortcut(self):
+        page = self.stack.currentWidget()
+        if not hasattr(page, "focus_new_task"):
+            projects = db.get_projects()
+            if not projects:
+                return
+            self.select_project_item(projects[0][0])
+            page = self.project_page_map.get(projects[0][0])
+        if page is not None:
+            page.focus_new_task()
+
+    def closeEvent(self, event):
+        self.settings.setValue("geometry", self.saveGeometry())
+        super().closeEvent(event)
+
     def check_reminders(self):
         deadlines = db.get_upcoming_deadlines()
         if not deadlines:
@@ -595,7 +802,7 @@ class PlannerApp(QMainWindow):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
-    app.setStyleSheet(APP_STYLE)
+    apply_theme(app, QSettings("PersonalWorkSchedule", "Planner").value("dark", False, type=bool))
 
     window = PlannerApp()
     window.show()
