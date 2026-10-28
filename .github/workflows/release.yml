@@ -1,0 +1,30 @@
+name: Release
+
+# Runs only when a version tag is pushed, e.g. `git tag v1.0.0 && git push origin v1.0.0`.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - run: pip install -r requirements.txt -r requirements-dev.txt pyinstaller
+      - run: python -m pytest -q
+      - run: pyinstaller --onefile --windowed --name PersonalWorkSchedule main.py
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "${{ github.ref_name }}" dist/PersonalWorkSchedule.exe --title "${{ github.ref_name }}" --generate-notes

@@ -88,6 +88,17 @@ python -m pytest
 
 The tests use a temporary database and render Qt offscreen, so they never touch your real `planner.db` and need no display. They run on every push via GitHub Actions.
 
+## Releases
+
+Releases are manual and only happen when you push a version tag. GitHub Actions then runs the tests, builds `PersonalWorkSchedule.exe` with PyInstaller and attaches it to a new GitHub Release with generated notes:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Ordinary pushes never create a release. The exe starts with an empty database; copy your own `planner.db` next to it to bring existing data.
+
 ## Project layout
 
 | Path | Purpose |
