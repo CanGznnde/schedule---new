@@ -128,12 +128,17 @@ class TaskView(QWidget):
         self.finish_btn.clicked.connect(self.finish_selected_task)
         self.finish_btn.setEnabled(False)
 
+        self.archive_btn = QPushButton("Archive Completed")
+        self.archive_btn.setToolTip("Move all completed tasks of this project to the Archive")
+        self.archive_btn.clicked.connect(self.archive_completed)
+
         self.delete_btn = QPushButton("Delete Selected / Checked")
         self.delete_btn.clicked.connect(self.delete_selected_task)
         self.delete_btn.setEnabled(False)
         self.task_list.currentItemChanged.connect(self.on_current_item_changed)
 
         action_row.addWidget(self.finish_btn)
+        action_row.addWidget(self.archive_btn)
         action_row.addStretch()
         action_row.addWidget(self.delete_btn)
         tab1_layout.addLayout(action_row)
@@ -175,6 +180,8 @@ class TaskView(QWidget):
         menu = QMenu(self)
         edit_action = menu.addAction("Edit Task Details")
         edit_action.triggered.connect(lambda: self.edit_task(item))
+        archive_action = menu.addAction("Archive Task")
+        archive_action.triggered.connect(lambda: self.archive_task(item))
         menu.exec(self.task_list.viewport().mapToGlobal(pos))
         
     def edit_task(self, item):
@@ -345,6 +352,21 @@ class TaskView(QWidget):
 
         task_id = current.data(Qt.ItemDataRole.UserRole)
         db.toggle_task_completion(task_id, 1)
+        self.load_tasks()
+        self.refresh_all_callback()
+
+    def archive_task(self, item):
+        task_id = item.data(Qt.ItemDataRole.UserRole)
+        if task_id is None:
+            return
+        db.set_task_archived(task_id, True)
+        self.load_tasks()
+        self.refresh_all_callback()
+
+    def archive_completed(self):
+        if not db.archive_completed_tasks(self.project_id):
+            QMessageBox.information(self, "Archive Completed", "There are no completed tasks to archive.")
+            return
         self.load_tasks()
         self.refresh_all_callback()
 

@@ -1,6 +1,9 @@
+import html
 import os
+import re
 import sys
 import sqlite3
+import uuid
 import datetime
 from pathlib import Path
 
@@ -17,6 +20,9 @@ def get_db_path():
     return str(base_dir / "planner.db")
 
 DB_NAME = get_db_path()
+
+# SQL condition for tasks (alias t) in projects (alias p) that are not archived.
+_ACTIVE = "ifnull(t.archived, 0) = 0 AND ifnull(p.archived, 0) = 0"
 
 def init_db():
     with sqlite3.connect(DB_NAME) as conn:
@@ -72,6 +78,10 @@ def init_db():
             c.execute("ALTER TABLE tasks ADD COLUMN priority INTEGER DEFAULT 0")
         if "notes" not in task_columns:
             c.execute("ALTER TABLE tasks ADD COLUMN notes TEXT DEFAULT ''")
+        if "archived" not in task_columns:
+            c.execute("ALTER TABLE tasks ADD COLUMN archived INTEGER DEFAULT 0")
+        if "archived" not in project_columns:
+            c.execute("ALTER TABLE projects ADD COLUMN archived INTEGER DEFAULT 0")
         
         # Insert a default project if empty
         c.execute("SELECT COUNT(*) FROM projects")
@@ -82,7 +92,7 @@ def init_db():
 def get_projects():
     with sqlite3.connect(DB_NAME) as conn:
         return conn.execute(
-            "SELECT id, name, start_date, end_date FROM projects ORDER BY sort_order ASC, id ASC"
+            "SELECT id, name, start_date, end_date FROM projects WHERE ifnull(archived, 0) = 0 ORDER BY sort_order ASC, id ASC"
         ).fetchall()
 
 def get_project(project_id):
@@ -155,7 +165,7 @@ def get_tasks(project_id):
             """
             SELECT id, title, start_date, deadline, start_time, end_time, completed, work_package
             FROM tasks
-            WHERE project_id=?
+            WHERE project_id=? AND ifnull(archived, 0) = 0
             ORDER BY completed ASC, deadline ASC, id DESC
             """,
             (project_id,),
@@ -232,7 +242,16 @@ def save_log(date_str, content):
 def get_upcoming_deadlines():
     today = datetime.date.today().isoformat()
     with sqlite3.connect(DB_NAME) as conn:
-        return conn.execute("SELECT title, deadline FROM tasks WHERE deadline >= ? AND completed = 0 ORDER BY deadline ASC", (today,)).fetchall()
+        return conn.execute(
+            f"""
+            SELECT t.title, t.deadline
+            FROM tasks t
+            JOIN projects p ON p.id = t.project_id
+            WHERE t.deadline >= ? AND t.completed = 0 AND {_ACTIVE}
+            ORDER BY t.deadline ASC
+            """,
+            (today,),
+        ).fetchall()
 
 def get_all_tasks():
     with sqlite3.connect(DB_NAME) as conn:
@@ -241,6 +260,7 @@ def get_all_tasks():
             SELECT t.title, t.start_date, t.deadline, p.name as project_name, t.start_time, t.end_time, t.completed, t.id, t.project_id, t.work_package
             FROM tasks t
             JOIN projects p ON t.project_id = p.id
+            WHERE ifnull(t.archived, 0) = 0 AND ifnull(p.archived, 0) = 0
             ORDER BY t.start_date ASC
             """
         ).fetchall()
@@ -254,6 +274,7 @@ def get_upcoming_meeting():
             FROM tasks t
             JOIN projects p ON t.project_id = p.id
             WHERE LOWER(t.work_package) = 'meeting' AND t.completed = 0 AND t.deadline >= ?
+              AND ifnull(t.archived, 0) = 0 AND ifnull(p.archived, 0) = 0
             ORDER BY t.deadline ASC
             LIMIT 1
             """,
@@ -268,6 +289,7 @@ def get_tasks_for_date(date_str):
             FROM tasks t
             JOIN projects p ON p.id = t.project_id
             WHERE ? BETWEEN ifnull(t.start_date, t.deadline) AND t.deadline
+              AND ifnull(t.archived, 0) = 0 AND ifnull(p.archived, 0) = 0
             ORDER BY t.completed ASC, t.title COLLATE NOCASE
             """,
             (date_str,),
@@ -280,6 +302,7 @@ def get_tasks_for_project_date(project_id, date_str):
             SELECT id, title, start_time, end_time, completed, work_package
             FROM tasks
             WHERE project_id = ? AND (? BETWEEN ifnull(start_date, deadline) AND deadline)
+              AND ifnull(archived, 0) = 0
             ORDER BY completed ASC, title COLLATE NOCASE
             """,
             (project_id, date_str),
@@ -287,19 +310,20 @@ def get_tasks_for_project_date(project_id, date_str):
 
 def get_dashboard_stats():
     today = datetime.date.today().isoformat()
+    base = f"FROM tasks t JOIN projects p ON p.id = t.project_id WHERE {_ACTIVE}"
     with sqlite3.connect(DB_NAME) as conn:
-        total = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
-        completed = conn.execute("SELECT COUNT(*) FROM tasks WHERE completed = 1").fetchone()[0]
+        total = conn.execute(f"SELECT COUNT(*) {base}").fetchone()[0]
+        completed = conn.execute(f"SELECT COUNT(*) {base} AND t.completed = 1").fetchone()[0]
         open_tasks = total - completed
         due_today = conn.execute(
-            "SELECT COUNT(*) FROM tasks WHERE deadline = ? AND completed = 0",
+            f"SELECT COUNT(*) {base} AND t.deadline = ? AND t.completed = 0",
             (today,),
         ).fetchone()[0]
         overdue = conn.execute(
-            "SELECT COUNT(*) FROM tasks WHERE deadline < ? AND completed = 0",
+            f"SELECT COUNT(*) {base} AND t.deadline < ? AND t.completed = 0",
             (today,),
         ).fetchone()[0]
-        projects = conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
+        projects = conn.execute("SELECT COUNT(*) FROM projects WHERE ifnull(archived, 0) = 0").fetchone()[0]
 
     return {
         "projects": projects,
@@ -309,6 +333,53 @@ def get_dashboard_stats():
         "due_today": due_today,
         "overdue": overdue,
     }
+
+
+# Archive: archived tasks/projects are hidden from every view and search, but kept in the database.
+
+def set_task_archived(task_id, archived=True):
+    with sqlite3.connect(DB_NAME) as conn:
+        conn.execute("UPDATE tasks SET archived=? WHERE id=?", (1 if archived else 0, task_id))
+
+def archive_completed_tasks(project_id):
+    """Archive every completed task of a project; returns how many were archived."""
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.execute(
+            "UPDATE tasks SET archived=1 WHERE project_id=? AND completed=1 AND ifnull(archived, 0)=0",
+            (project_id,),
+        )
+        return cursor.rowcount
+
+def set_project_archived(project_id, archived=True):
+    with sqlite3.connect(DB_NAME) as conn:
+        conn.execute("UPDATE projects SET archived=? WHERE id=?", (1 if archived else 0, project_id))
+
+def get_archived_projects():
+    """Archived projects as (id, name, start_date, end_date, task_count)."""
+    with sqlite3.connect(DB_NAME) as conn:
+        return conn.execute(
+            """
+            SELECT p.id, p.name, p.start_date, p.end_date, COUNT(t.id)
+            FROM projects p
+            LEFT JOIN tasks t ON t.project_id = p.id
+            WHERE p.archived = 1
+            GROUP BY p.id
+            ORDER BY p.name COLLATE NOCASE
+            """
+        ).fetchall()
+
+def get_archived_tasks():
+    """Individually archived tasks of active projects as (id, title, deadline, completed, project_id, project_name)."""
+    with sqlite3.connect(DB_NAME) as conn:
+        return conn.execute(
+            """
+            SELECT t.id, t.title, t.deadline, t.completed, p.id, p.name
+            FROM tasks t
+            JOIN projects p ON p.id = t.project_id
+            WHERE t.archived = 1 AND ifnull(p.archived, 0) = 0
+            ORDER BY t.deadline DESC
+            """
+        ).fetchall()
 
 
 def _like(query):
@@ -324,8 +395,9 @@ def search_tasks(query, limit=100):
             SELECT t.id, t.title, t.deadline, t.completed, p.id, p.name
             FROM tasks t
             JOIN projects p ON p.id = t.project_id
-            WHERE t.title LIKE ? ESCAPE '!' OR ifnull(t.notes, '') LIKE ? ESCAPE '!'
-               OR ifnull(t.work_package, '') LIKE ? ESCAPE '!' OR p.name LIKE ? ESCAPE '!'
+            WHERE ifnull(t.archived, 0) = 0 AND ifnull(p.archived, 0) = 0
+              AND (t.title LIKE ? ESCAPE '!' OR ifnull(t.notes, '') LIKE ? ESCAPE '!'
+                   OR ifnull(t.work_package, '') LIKE ? ESCAPE '!' OR p.name LIKE ? ESCAPE '!')
             ORDER BY t.completed ASC, t.deadline ASC
             LIMIT ?
             """,
@@ -333,9 +405,47 @@ def search_tasks(query, limit=100):
         ).fetchall()
 
 def search_logs(query, limit=50):
-    """Daily logs containing the query, newest first."""
+    """Daily logs containing the query (matched on their plain text), newest first."""
+    needle = query.lower()
     with sqlite3.connect(DB_NAME) as conn:
-        return conn.execute(
-            "SELECT date, content FROM daily_logs WHERE content LIKE ? ESCAPE '!' ORDER BY date DESC LIMIT ?",
-            (_like(query), limit),
-        ).fetchall()
+        rows = conn.execute("SELECT date, content FROM daily_logs ORDER BY date DESC").fetchall()
+    matches = []
+    for date_str, content in rows:
+        plain = log_to_plain(content or "")
+        if needle in plain.lower():
+            matches.append((date_str, plain))
+            if len(matches) >= limit:
+                break
+    return matches
+
+
+# Daily-log images: files live in an "attachments" folder next to the database and are
+# referenced by relative path, so moving the folder (database + attachments) keeps them working.
+
+def attachments_dir():
+    return Path(DB_NAME).parent / "attachments"
+
+def store_attachment(data, suffix=".png"):
+    """Save image bytes in the attachments folder; returns the relative path used in log HTML."""
+    folder = attachments_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    suffix = suffix.lower() if suffix and suffix.startswith(".") else ".png"
+    name = f"{uuid.uuid4().hex}{suffix}"
+    (folder / name).write_bytes(data)
+    return f"attachments/{name}"
+
+def attachment_path(relative):
+    return Path(DB_NAME).parent / relative
+
+def is_rich_log(content):
+    return content.lstrip()[:15].lower().startswith(("<!doctype html", "<html"))
+
+def log_to_plain(content):
+    """Plain-text view of a log (logs containing images are stored as HTML)."""
+    if not is_rich_log(content):
+        return content
+    text = re.sub(r"(?is)<(head|style)\b.*?</\1>", "", content)
+    text = re.sub(r"(?i)<img\b[^>]*>", "[image]", text)
+    text = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</li>", "\n", text)
+    text = re.sub(r"(?s)<[^>]+>", "", text)
+    return html.unescape(text).strip()

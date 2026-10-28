@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 import database as db
-from views import CalendarView, DailyLogView, DashboardView, ProjectsOverviewView, TaskView
+from views import ArchiveView, CalendarView, DailyLogView, DashboardView, ProjectsOverviewView, TaskView
 
 
 THEMES = {
@@ -224,6 +224,10 @@ class SearchDialog(QDialog):
         self.navigate_callback(target)
 
 
+# Stack pages: dashboard, projects overview, daily log, calendar, archive, then one page per project.
+FIRST_PROJECT_PAGE = 5
+
+
 class ProjectDateDialog(QDialog):
     def __init__(self, parent=None, start_date=None, end_date=None):
         super().__init__(parent)
@@ -357,6 +361,7 @@ class PlannerApp(QMainWindow):
         self.projects_overview_view = ProjectsOverviewView(self.select_project_item)
         self.daily_view = DailyLogView()
         self.calendar_view = CalendarView()
+        self.archive_view = ArchiveView(self.refresh_all_views)
 
         self.sidebar.addTopLevelItem(self._new_item("Dashboard", "static", 0))
         self.stack.addWidget(self.dashboard_view)
@@ -369,8 +374,11 @@ class PlannerApp(QMainWindow):
         self.sidebar.addTopLevelItem(self._new_item("Calendar", "static", 3))
         self.stack.addWidget(self.calendar_view)
 
+        self.stack.addWidget(self.archive_view)
+
         self.projects_group_item = self._new_item("Projects", "projects_group", 1)
         self.sidebar.addTopLevelItem(self.projects_group_item)
+        self.sidebar.addTopLevelItem(self._new_item("Archive", "static", 4))
 
         self.project_page_map = {}
         for project_id, project_name, start_date, end_date in db.get_projects():
@@ -461,7 +469,7 @@ class PlannerApp(QMainWindow):
             projects = list(db.get_projects())
             project_order = [pid for pid, _, _, _ in projects]
             if payload in project_order:
-                stack_index = 4 + project_order.index(payload)
+                stack_index = FIRST_PROJECT_PAGE + project_order.index(payload)
                 if 0 <= stack_index < self.stack.count():
                     self.stack.setCurrentIndex(stack_index)
 
@@ -485,6 +493,9 @@ class PlannerApp(QMainWindow):
 
             edit_dates_action = menu.addAction("Edit Project Dates")
             edit_dates_action.triggered.connect(lambda: self.edit_project_dates(project_id))
+
+            archive_action = menu.addAction("Archive Project")
+            archive_action.triggered.connect(lambda: self.archive_project(project_id))
 
             delete_action = menu.addAction("Delete Selected Project")
             delete_action.triggered.connect(lambda: self.delete_selected_project(project_id))
@@ -547,14 +558,19 @@ class PlannerApp(QMainWindow):
         self.calendar_view.refresh()
         current_item = self.sidebar.currentItem()
         current_project = None
+        static_page = None
         if current_item:
             meta = current_item.data(0, Qt.ItemDataRole.UserRole) or {}
             if meta.get("type") in {"project", "task"}:
                 current_project = meta.get("payload")
+            elif meta.get("type") == "static":
+                static_page = meta.get("payload")
 
         self.setup_ui()
         if current_project is not None:
             self.select_project_item(current_project)
+        elif static_page is not None:
+            self.select_static_item(static_page)
         else:
             self._select_home_item()
 
@@ -704,6 +720,11 @@ class PlannerApp(QMainWindow):
 
         self.setup_ui()
         self.select_project_item(target_project_id)
+
+    def archive_project(self, project_id):
+        db.set_project_archived(project_id, True)
+        self.setup_ui()
+        self._select_home_item()
 
     def delete_selected_project(self, project_id=None):
         if project_id is None:
