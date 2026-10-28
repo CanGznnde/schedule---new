@@ -79,15 +79,6 @@ pyinstaller --onefile --windowed --name PersonalWorkSchedule main.py
 
 The executable is written to `dist/`. Place a `planner.db` next to it to bring existing data, otherwise a fresh one is created. If the build misses SQLite DLLs (common with Anaconda Python), add them with `--add-binary`.
 
-## Development
-
-```bash
-pip install -r requirements.txt pytest
-python -m pytest
-```
-
-The tests use a temporary database and render Qt offscreen, so they never touch your real `planner.db` and need no display.
-
 ## Releases
 
 Releases are built and published by hand. Build the exe (see above), then create a release on GitHub from a version tag and attach `dist/PersonalWorkSchedule.exe`, plus a `.zip` or `.tar.gz` of it if you like:
@@ -106,5 +97,4 @@ GitHub adds the source code archives to every release automatically. The exe sta
 | `main.py` | Main window, sidebar, project management, theme and application entry point |
 | `database.py` | SQLite schema, migrations, queries and attachment storage |
 | `views/` | One module per screen: `dashboard`, `tasks`, `gantt`, `calendar_view`, `calendar_widget`, `daily_log`, `archive`, `dialogs`, plus shared `theme` |
-| `tests/` | pytest suite for the database layer and the UI |
 | `docs/screenshots/` | Images used in this README |

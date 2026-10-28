@@ -21,3 +21,7 @@ Thumbs.db
 
 # Daily-log images
 attachments/
+
+# Local test suite (not published)
+tests/
+.pytest_cache/
