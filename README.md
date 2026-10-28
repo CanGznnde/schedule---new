@@ -90,7 +90,7 @@ The tests use a temporary database and render Qt offscreen, so they never touch 
 
 ## Releases
 
-Releases are manual and only happen when you push a version tag. GitHub Actions then runs the tests, builds `PersonalWorkSchedule.exe` with PyInstaller and attaches it to a new GitHub Release with generated notes:
+Releases are manual and only happen when you push a version tag. GitHub Actions then builds `PersonalWorkSchedule.exe` with PyInstaller and attaches it, plus `.zip` and `.tar.gz` bundles (exe + README), to a new GitHub Release with generated notes. GitHub also adds the source code archives itself:
 
 ```bash
 git tag v1.0.0

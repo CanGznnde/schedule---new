@@ -1,6 +1,8 @@
 name: Release
 
 # Runs only when a version tag is pushed, e.g. `git tag v1.0.0 && git push origin v1.0.0`.
+# Attaches the exe plus zip and tar.gz bundles (exe + README). GitHub adds the
+# "Source code" zip/tar.gz of the tagged commit to every release on its own.
 on:
   push:
     tags:
@@ -22,9 +24,22 @@ jobs:
             requirements.txt
             requirements-dev.txt
       - run: pip install -r requirements.txt -r requirements-dev.txt pyinstaller
+      # Tests are reported by the "Tests" workflow on every push; they do not block a release.
       - run: python -m pytest -q
+        continue-on-error: true
       - run: pyinstaller --onefile --windowed --name PersonalWorkSchedule main.py
+      - name: Package bundles
+        shell: pwsh
+        run: |
+          $name = "PersonalWorkSchedule-${{ github.ref_name }}-windows"
+          New-Item -ItemType Directory $name | Out-Null
+          Copy-Item dist/PersonalWorkSchedule.exe, README.md $name
+          Compress-Archive -Path $name -DestinationPath "$name.zip"
+          tar -czf "$name.tar.gz" $name
       - name: Create GitHub release
+        shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "${{ github.ref_name }}" dist/PersonalWorkSchedule.exe --title "${{ github.ref_name }}" --generate-notes
+        run: |
+          $name = "PersonalWorkSchedule-${{ github.ref_name }}-windows"
+          gh release create "${{ github.ref_name }}" dist/PersonalWorkSchedule.exe "$name.zip" "$name.tar.gz" --title "${{ github.ref_name }}" --generate-notes

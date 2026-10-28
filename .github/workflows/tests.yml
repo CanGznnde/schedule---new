@@ -16,5 +16,7 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             requirements-dev.txt
+      - run: python -VV
       - run: pip install -r requirements.txt -r requirements-dev.txt
-      - run: python -m pytest -q
+      - run: pip list
+      - run: python -m pytest -v -ra --tb=short
