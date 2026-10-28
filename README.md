@@ -82,22 +82,22 @@ The executable is written to `dist/`. Place a `planner.db` next to it to bring e
 ## Development
 
 ```bash
-pip install -r requirements.txt -r requirements-dev.txt
+pip install -r requirements.txt pytest
 python -m pytest
 ```
 
-The tests use a temporary database and render Qt offscreen, so they never touch your real `planner.db` and need no display. They run on every push via GitHub Actions.
+The tests use a temporary database and render Qt offscreen, so they never touch your real `planner.db` and need no display.
 
 ## Releases
 
-Releases are manual and only happen when you push a version tag. GitHub Actions then builds `PersonalWorkSchedule.exe` with PyInstaller and attaches it, plus `.zip` and `.tar.gz` bundles (exe + README), to a new GitHub Release with generated notes. GitHub also adds the source code archives itself:
+Releases are built and published by hand. Build the exe (see above), then create a release on GitHub from a version tag and attach `dist/PersonalWorkSchedule.exe`, plus a `.zip` or `.tar.gz` of it if you like:
 
 ```bash
 git tag v1.0.0
 git push origin v1.0.0
 ```
 
-Ordinary pushes never create a release. The exe starts with an empty database; copy your own `planner.db` next to it to bring existing data.
+GitHub adds the source code archives to every release automatically. The exe starts with an empty database; copy your own `planner.db` next to it to bring existing data.
 
 ## Project layout
 
